@@ -120,7 +120,7 @@ public class AuthHandlers {
   static class TokenAuthHandler implements AuthHandler {
     @Override
     public VaultLoginBy[] supports() {
-      return new VaultLoginBy[]{VaultLoginBy.Token};
+      return new VaultLoginBy[]{VaultLoginBy.Token, VaultLoginBy.Kubernetes};
     }
 
     @Override

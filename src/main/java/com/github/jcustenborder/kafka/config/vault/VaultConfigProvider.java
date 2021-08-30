@@ -19,6 +19,7 @@ import com.bettercloud.vault.Vault;
 import com.bettercloud.vault.VaultConfig;
 import com.bettercloud.vault.VaultException;
 import com.bettercloud.vault.response.LogicalResponse;
+import com.github.jcustenborder.kafka.config.vault.VaultConfigProviderConfig.VaultLoginBy;
 import com.github.jcustenborder.kafka.connect.utils.config.Description;
 import org.apache.kafka.common.config.ConfigData;
 import org.apache.kafka.common.config.ConfigDef;
@@ -95,6 +96,11 @@ public class VaultConfigProvider implements ConfigProvider {
 
     VaultConfig config = this.config.createConfig();
     this.vault = new Vault(config);
+
+    if (this.config.loginBy == VaultLoginBy.Kubernetes) {
+      String kubernetesAuthToken = new KubernetesAuth(this.config, this.vault).getToken();
+      config.token(kubernetesAuthToken);
+    }
 
     AuthHandlers.AuthHandler authHandler = AuthHandlers.getHandler(this.config.loginBy);
     AuthHandlers.AuthConfig authConfig;

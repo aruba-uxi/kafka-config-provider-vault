@@ -62,11 +62,20 @@ class VaultConfigProviderConfig extends AbstractConfig {
   static final String SSL_VERIFY_ENABLED_DOC = "Flag to determine if the configProvider should verify the SSL Certificate " +
       "of the Vault server. Outside of development this should never be enabled.";
 
+  public static final String ROLE_CONFIG = "vault.role";
+  static final String ROLE_DOC = "Sets the role used to use with kubernetes authentication.";
+
+  public static final String JWT_PATH_CONFIG = "vault.jwt.path";
+  static final String JWT_PATH_DOC = "Sets the path for the JWT token used with kubernetes authentication. "
+      + "If no path is explicitly set then /var/run/secrets/kubernetes.io/serviceaccount/token is used ";
+
   public final int maxRetries;
   public final int retryInterval;
   public final boolean sslVerifyEnabled;
   public final VaultLoginBy loginBy;
   public final long minimumSecretTTL;
+  public final String role;
+  public final String jwtPath;
 
   public VaultConfigProviderConfig(Map<String, ?> settings) {
     super(config(), settings);
@@ -75,6 +84,8 @@ class VaultConfigProviderConfig extends AbstractConfig {
     this.sslVerifyEnabled = getBoolean(SSL_VERIFY_ENABLED_CONFIG);
     this.loginBy = ConfigUtils.getEnum(VaultLoginBy.class, this, LOGIN_BY_CONFIG);
     this.minimumSecretTTL = getLong(MIN_TTL_MS_CONFIG);
+    this.role = getString(ROLE_CONFIG);
+    this.jwtPath = getString(JWT_PATH_CONFIG);
   }
 
   public static ConfigDef config() {
@@ -140,6 +151,18 @@ class VaultConfigProviderConfig extends AbstractConfig {
                 .defaultValue(1000L)
                 .validator(ConfigDef.Range.atLeast(1000L))
                 .build()
+        ).define(
+          ConfigKeyBuilder.of(ROLE_CONFIG, ConfigDef.Type.STRING)
+              .documentation(ROLE_DOC)
+              .importance(ConfigDef.Importance.LOW)
+              .defaultValue("")
+              .build()
+        ).define(
+          ConfigKeyBuilder.of(JWT_PATH_CONFIG, ConfigDef.Type.STRING)
+              .documentation(JWT_PATH_DOC)
+              .importance(ConfigDef.Importance.LOW)
+              .defaultValue("")
+              .build()
         );
   }
 
@@ -214,7 +237,8 @@ class VaultConfigProviderConfig extends AbstractConfig {
   public enum VaultLoginBy {
     @Description("Authentication via the `token\n" + "<https://www.vaultproject.io/docs/auth/token>`_. endpoint.")
     Token,
-
+    @Description("Authentication via a kubernetes retrieved `token\n" + "<https://www.vaultproject.io/docs/auth/kubernetes>`_. endpoint.")
+    Kubernetes,
 //    @Description("")
 //    AppRole,
 //    UserPass,
@@ -224,7 +248,6 @@ class VaultConfigProviderConfig extends AbstractConfig {
 //    Github,
 //    Jwt,
 //    GCP,
-//    Kubernetes,
 //    ByCert,
   }
 
