@@ -97,13 +97,22 @@ public class VaultConfigProvider implements ConfigProvider {
     VaultConfig config = this.config.createConfig();
     this.vault = new Vault(config);
 
-    if (this.config.loginBy == VaultLoginBy.Kubernetes) {
-      String kubernetesAuthToken = new KubernetesAuth(this.config, this.vault).getToken();
-      config.token(kubernetesAuthToken);
+    try {
+      if (this.config.loginBy == VaultLoginBy.Kubernetes) {
+        String kubernetesAuthToken = new KubernetesAuth(this.config, this.vault).getToken();
+        config.token(kubernetesAuthToken);
+      }
+    } catch (Exception ex) {
+      ConfigException configException = new ConfigException(
+          String.format("Could not retrieve toke", ex)
+      );
+      configException.initCause(ex);
+      throw configException;
     }
 
     AuthHandlers.AuthHandler authHandler = AuthHandlers.getHandler(this.config.loginBy);
     AuthHandlers.AuthConfig authConfig;
+
     try {
       authConfig = authHandler.auth(this.config, this.vault);
     } catch (VaultException ex) {

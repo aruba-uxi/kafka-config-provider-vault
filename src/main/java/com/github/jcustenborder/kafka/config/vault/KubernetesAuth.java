@@ -38,33 +38,36 @@ public class KubernetesAuth {
     this.vault = vault;
   }
 
-  private static String getJWT(String path) {
+  private static String getJWT(String path) throws IOException {
     String content = "";
     Path file = Paths.get(path);
     try {
       content = new String(Files.readAllBytes(file));
-    } catch (IOException e) {
+    } catch (IOException ex) {
       log.error("Could not read contents of file (%s)", path);
-      throw new RuntimeException(e);
+      throw ex;
     }
     return content;
   }
 
-  public String getToken() {
+  public String getToken() throws Exception {
+    if (Strings.isNullOrEmpty(config.role)) {
+      throw new Exception("ROLE is empty or undefined");
+    }
+
+    if (Strings.isNullOrEmpty(config.jwtPath)) {
+      throw new Exception("JWT_PATH is empty or undefined");
+    }
+    
     try {
-
-      if (Strings.isNullOrEmpty(config.role)) {
-        throw new Exception("ROLE is empty or undefined");
-      }
-
-      if (Strings.isNullOrEmpty(config.jwtPath)) {
-        throw new Exception("JWT_PATH is empty or undefined");
-      }
-
       String role = config.role;
       String jwt = getJWT(config.jwtPath);
-      AuthResponse authResponse = vault.auth().loginByKubernetes(role, jwt);
 
+      if (Strings.isNullOrEmpty(jwt)) {
+        throw new Exception(String.format("JWT token from file is invalid (%s)", jwt));
+      }
+      
+      AuthResponse authResponse = vault.auth().loginByKubernetes(role, jwt);
       return authResponse.getAuthClientToken();
     } catch (Exception e) {
       throw new RuntimeException(e);
