@@ -18,6 +18,9 @@ package com.github.jcustenborder.kafka.config.vault;
 import com.bettercloud.vault.Vault;
 import com.bettercloud.vault.response.AuthResponse;
 import com.google.common.base.Strings;
+import com.sun.tools.sjavac.Log;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -25,6 +28,8 @@ import java.nio.file.Files;
 import java.io.IOException;
 
 public class KubernetesAuth {
+  private static final Logger log = LoggerFactory.getLogger(AuthHandlers.class);
+
   VaultConfigProviderConfig config;
   Vault vault;
 
@@ -39,7 +44,8 @@ public class KubernetesAuth {
     try {
       content = new String(Files.readAllBytes(file));
     } catch (IOException e) {
-      e.printStackTrace();
+      log.error("Could not read contents of file (%s)", path);
+      throw new RuntimeException(e);
     }
     return content;
   }
