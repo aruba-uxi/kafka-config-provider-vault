@@ -18,7 +18,6 @@ package com.github.jcustenborder.kafka.config.vault;
 import com.bettercloud.vault.Vault;
 import com.bettercloud.vault.response.AuthResponse;
 import com.google.common.base.Strings;
-import com.sun.tools.sjavac.Log;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
