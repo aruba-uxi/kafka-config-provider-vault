@@ -100,25 +100,7 @@ public class VaultConfigProvider implements ConfigProvider {
   @Override
   public void configure(Map<String, ?> settings) {
     this.config = new VaultConfigProviderConfig(settings);
-
-    VaultConfig config = this.config.createConfig();
-    this.vault = new Vault(config);
-
-    try {
-      if (this.config.loginBy == VaultLoginBy.Kubernetes) {
-        String role = this.config.role;
-        String jwt = getJWT(this.config.jwtPath);
-        this.kubernetesAuth = new KubernetesAuth(this.vault, role, jwt);
-        String kubernetesAuthToken = this.kubernetesAuth.getToken();
-        config.token(kubernetesAuthToken);
-      }
-    } catch (Exception ex) {
-      ConfigException configException = new ConfigException(
-          String.format("Could not retrieve token", ex)
-      );
-      configException.initCause(ex);
-      throw configException;
-    }
+    configureVault();
 
     AuthHandlers.AuthHandler authHandler = AuthHandlers.getHandler(this.config.loginBy);
     AuthHandlers.AuthConfig authConfig;
@@ -144,6 +126,27 @@ public class VaultConfigProvider implements ConfigProvider {
       return jwt;
     } catch (Exception ex) {
       throw new ConfigException("Could not load JWT token from file", ex);
+    }
+  }
+
+  private void configureVault() {
+    VaultConfig config = this.config.createConfig();
+    this.vault = new Vault(config);
+
+    try {
+      if (this.config.loginBy == VaultLoginBy.Kubernetes) {
+        String role = this.config.role;
+        String jwt = getJWT(this.config.jwtPath);
+        this.kubernetesAuth = new KubernetesAuth(this.vault, role, jwt);
+        String kubernetesAuthToken = this.kubernetesAuth.getToken();
+        config.token(kubernetesAuthToken);
+      }
+    } catch (Exception ex) {
+      ConfigException configException = new ConfigException(
+          String.format("Could not configure vault with Kubernetes Authentication", ex)
+      );
+      configException.initCause(ex);
+      throw configException;
     }
   }
 
