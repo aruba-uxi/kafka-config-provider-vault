@@ -104,7 +104,7 @@ public class VaultConfigProvider implements ConfigProvider {
       }
     } catch (Exception ex) {
       ConfigException configException = new ConfigException(
-          String.format("Could not retrieve toke", ex)
+          String.format("Could not retrieve token", ex)
       );
       configException.initCause(ex);
       throw configException;
