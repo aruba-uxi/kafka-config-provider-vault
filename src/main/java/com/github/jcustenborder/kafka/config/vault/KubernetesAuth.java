@@ -22,6 +22,7 @@ import com.bettercloud.vault.response.AuthResponse;
 import org.apache.kafka.connect.errors.ConnectException;
 
 public class KubernetesAuth {
+  
   Vault vault;
   String role;
   String jwt;
@@ -36,9 +37,8 @@ public class KubernetesAuth {
   }
 
   public String getToken() throws Exception {
-    AuthResponse authResponse = getKubernetesAuthResponse();
-    
     try {
+      AuthResponse authResponse = getKubernetesAuthResponse();
       return authResponse.getAuthClientToken();
     } catch (Exception e) {
       throw new RuntimeException(e);

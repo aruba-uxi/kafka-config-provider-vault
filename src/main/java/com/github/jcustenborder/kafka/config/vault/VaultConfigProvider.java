@@ -19,6 +19,7 @@ import com.bettercloud.vault.Vault;
 import com.bettercloud.vault.VaultConfig;
 import com.bettercloud.vault.VaultException;
 import com.bettercloud.vault.response.LogicalResponse;
+import com.bettercloud.vault.response.LookupResponse;
 import com.github.jcustenborder.kafka.config.vault.VaultConfigProviderConfig.VaultLoginBy;
 import com.github.jcustenborder.kafka.connect.utils.config.Description;
 import com.google.common.base.Strings;
@@ -33,11 +34,13 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
 import java.nio.file.Files;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -45,6 +48,9 @@ import java.util.stream.Collectors;
     "Config providers are generic and can be used in any application that utilized the Kafka AbstractConfig class. ")
 public class VaultConfigProvider implements ConfigProvider {
   private static final Logger log = LoggerFactory.getLogger(VaultConfigProvider.class);
+  private final AtomicReference<TokenMetadata> tokenMetadata = new AtomicReference<>(
+    new TokenMetadata(null)
+  );
   VaultConfigProviderConfig config;
   Vault vault;
   KubernetesAuth kubernetesAuth;
@@ -116,6 +122,13 @@ public class VaultConfigProvider implements ConfigProvider {
     log.trace("authConfig = {}", authConfig);
   }
 
+  private LocalDateTime getTokenExpirationTime() throws VaultException {
+    Long hardRenewThreshold = 5L;
+    LookupResponse lookupResponse = vault.auth().lookupSelf();
+    long creationTtlInSec = lookupResponse.getCreationTTL() != 0L ? lookupResponse.getCreationTTL() : lookupResponse.getTTL();
+    return LocalDateTime.now().plusSeconds(creationTtlInSec - hardRenewThreshold);
+  }
+
   private static String getJWT(String path) throws ConfigException {
     try {
       Path file = Paths.get(path);
@@ -125,7 +138,11 @@ public class VaultConfigProvider implements ConfigProvider {
       }
       return jwt;
     } catch (Exception ex) {
-      throw new ConfigException("Could not load JWT token from file", ex);
+      ConfigException configException = new ConfigException(
+        String.format("Could not load JWT token from file", ex)
+      );
+      configException.initCause(ex);
+      throw configException;
     }
   }
 
@@ -140,6 +157,7 @@ public class VaultConfigProvider implements ConfigProvider {
         this.kubernetesAuth = new KubernetesAuth(this.vault, role, jwt);
         String kubernetesAuthToken = this.kubernetesAuth.getToken();
         config.token(kubernetesAuthToken);
+        this.tokenMetadata.set(new TokenMetadata(getTokenExpirationTime()));
       }
     } catch (Exception ex) {
       ConfigException configException = new ConfigException(
@@ -152,5 +170,18 @@ public class VaultConfigProvider implements ConfigProvider {
 
   public static ConfigDef config() {
     return VaultConfigProviderConfig.config();
+  }
+
+  private static class TokenMetadata {
+
+    private final LocalDateTime tokenExpirationTime;
+
+    public LocalDateTime getExpirationTime() {
+        return this.tokenExpirationTime;
+    }
+
+      public TokenMetadata(LocalDateTime tokenExpirationTime) {
+        this.tokenExpirationTime = tokenExpirationTime;
+    }
   }
 }
