@@ -104,7 +104,6 @@ class VaultConfigProviderConfig extends AbstractConfig {
                 .defaultValue(VaultLoginBy.Token.name())
                 .build()
         )
-
         .define(
             ConfigKeyBuilder.of(TOKEN_CONFIG, ConfigDef.Type.PASSWORD)
                 .documentation(TOKEN_DOC)

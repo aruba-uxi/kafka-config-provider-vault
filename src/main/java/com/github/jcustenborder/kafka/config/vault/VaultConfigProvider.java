@@ -21,6 +21,8 @@ import com.bettercloud.vault.VaultException;
 import com.bettercloud.vault.response.LogicalResponse;
 import com.github.jcustenborder.kafka.config.vault.VaultConfigProviderConfig.VaultLoginBy;
 import com.github.jcustenborder.kafka.connect.utils.config.Description;
+import com.google.common.base.Strings;
+
 import org.apache.kafka.common.config.ConfigData;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
@@ -29,6 +31,9 @@ import org.apache.kafka.connect.errors.ConnectException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.Files;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Map;
@@ -42,6 +47,7 @@ public class VaultConfigProvider implements ConfigProvider {
   private static final Logger log = LoggerFactory.getLogger(VaultConfigProvider.class);
   VaultConfigProviderConfig config;
   Vault vault;
+  KubernetesAuth kubernetesAuth;
 
 
   @Override
@@ -90,6 +96,7 @@ public class VaultConfigProvider implements ConfigProvider {
 
   }
 
+
   @Override
   public void configure(Map<String, ?> settings) {
     this.config = new VaultConfigProviderConfig(settings);
@@ -99,7 +106,10 @@ public class VaultConfigProvider implements ConfigProvider {
 
     try {
       if (this.config.loginBy == VaultLoginBy.Kubernetes) {
-        String kubernetesAuthToken = new KubernetesAuth(this.config, this.vault).getToken();
+        String role = this.config.role;
+        String jwt = getJWT(this.config.jwtPath);
+        this.kubernetesAuth = new KubernetesAuth(this.vault, role, jwt);
+        String kubernetesAuthToken = this.kubernetesAuth.getToken();
         config.token(kubernetesAuthToken);
       }
     } catch (Exception ex) {
@@ -122,6 +132,19 @@ public class VaultConfigProvider implements ConfigProvider {
       );
     }
     log.trace("authConfig = {}", authConfig);
+  }
+
+  private static String getJWT(String path) throws ConfigException {
+    try {
+      Path file = Paths.get(path);
+      String jwt = new String(Files.readAllBytes(file));
+      if (Strings.isNullOrEmpty(jwt)) {
+        throw new Exception(String.format("JWT token from file is invalid (%s)", jwt));
+      }
+      return jwt;
+    } catch (Exception ex) {
+      throw new ConfigException("Could not load JWT token from file", ex);
+    }
   }
 
   public static ConfigDef config() {
