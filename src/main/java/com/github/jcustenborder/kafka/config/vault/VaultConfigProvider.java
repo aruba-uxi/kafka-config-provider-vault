@@ -18,8 +18,8 @@ package com.github.jcustenborder.kafka.config.vault;
 import com.bettercloud.vault.Vault;
 import com.bettercloud.vault.VaultConfig;
 import com.bettercloud.vault.VaultException;
+import com.bettercloud.vault.response.AuthResponse;
 import com.bettercloud.vault.response.LogicalResponse;
-import com.bettercloud.vault.response.LookupResponse;
 import com.github.jcustenborder.kafka.config.vault.VaultConfigProviderConfig.VaultLoginBy;
 import com.github.jcustenborder.kafka.connect.utils.config.Description;
 import com.google.common.base.Strings;
@@ -32,11 +32,13 @@ import org.apache.kafka.connect.errors.ConnectException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDateTime;
-import java.nio.file.Files;
+import java.nio.file.Path;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
@@ -48,13 +50,11 @@ import java.util.stream.Collectors;
     "Config providers are generic and can be used in any application that utilized the Kafka AbstractConfig class. ")
 public class VaultConfigProvider implements ConfigProvider {
   private static final Logger log = LoggerFactory.getLogger(VaultConfigProvider.class);
-  private final AtomicReference<TokenMetadata> tokenMetadata = new AtomicReference<>(
-    new TokenMetadata(null)
-  );
-  VaultConfigProviderConfig config;
-  Vault vault;
-  KubernetesAuth kubernetesAuth;
+  private static final AtomicReference<TokenMetadata> TOKEN_METADATA = new AtomicReference<>(new TokenMetadata(null, LocalDateTime.now()));
 
+  VaultConfigProviderConfig vaultConfigProviderConfig;
+  Vault vault;
+  VaultConfig vaultConfig;
 
   @Override
   public ConfigData get(String path) {
@@ -63,11 +63,16 @@ public class VaultConfigProvider implements ConfigProvider {
 
   @Override
   public ConfigData get(String path, Set<String> keys) {
+    ensureVaultIsAuthenticated();
+
+    if (Strings.isNullOrEmpty(path)) {
+      log.warn("Vault path '{}'' is not set or empty", path);
+      return new ConfigData(Collections.emptyMap());
+    }
+
     log.info("get() - path = '{}' keys = '{}'", path, keys);
     try {
-      LogicalResponse logicalResponse = this.vault.withRetries(this.config.maxRetries, this.config.retryInterval)
-          .logical()
-          .read(path);
+      LogicalResponse logicalResponse = this.vault.withRetries(this.vaultConfigProviderConfig.maxRetries, this.vaultConfigProviderConfig.retryInterval).logical().read(path);
       if (logicalResponse.getRestResponse().getStatus() == 200) {
         Predicate<Map.Entry<String, String>> filter = keys == null || keys.isEmpty() ?
             entry -> true : entry -> keys.contains(entry.getKey());
@@ -79,7 +84,7 @@ public class VaultConfigProvider implements ConfigProvider {
 
         Long ttl = logicalResponse.getLeaseDuration();
         if (ttl == null || ttl <= 0) {
-          ttl = config.minimumSecretTTL;
+          ttl = vaultConfigProviderConfig.minimumSecretTTL;
         }
         return new ConfigData(result, ttl);
       } else {
@@ -98,21 +103,20 @@ public class VaultConfigProvider implements ConfigProvider {
 
 
   @Override
-  public void close() throws IOException {
-
-  }
+  public void close() throws IOException {}
 
 
   @Override
   public void configure(Map<String, ?> settings) {
-    this.config = new VaultConfigProviderConfig(settings);
-    configureVault();
+    this.vaultConfigProviderConfig = new VaultConfigProviderConfig(settings);
+    buildVault();
+    ensureVaultIsAuthenticated();
 
-    AuthHandlers.AuthHandler authHandler = AuthHandlers.getHandler(this.config.loginBy);
+    AuthHandlers.AuthHandler authHandler = AuthHandlers.getHandler(this.vaultConfigProviderConfig.loginBy);
     AuthHandlers.AuthConfig authConfig;
 
     try {
-      authConfig = authHandler.auth(this.config, this.vault);
+      authConfig = authHandler.auth(this.vaultConfigProviderConfig, this.vault);
     } catch (VaultException ex) {
       throw new ConnectException(
           "Exception while authenticating to Vault",
@@ -122,49 +126,91 @@ public class VaultConfigProvider implements ConfigProvider {
     log.trace("authConfig = {}", authConfig);
   }
 
-  private LocalDateTime getTokenExpirationTime() throws VaultException {
-    Long hardRenewThreshold = 5L;
-    LookupResponse lookupResponse = vault.auth().lookupSelf();
-    long creationTtlInSec = lookupResponse.getCreationTTL() != 0L ? lookupResponse.getCreationTTL() : lookupResponse.getTTL();
-    return LocalDateTime.now().plusSeconds(creationTtlInSec - hardRenewThreshold);
+  private void buildVault() {
+    this.vaultConfig = vaultConfigProviderConfig.createConfig();
+
+    String token = TOKEN_METADATA.get().getToken();
+    log.info("DEBUGGING: buildVault.token: '{}'", token);
+    if (!Strings.isNullOrEmpty(token)) {
+      log.info("DEBUGGING: Using token saved in metadata");
+      this.vaultConfig.token(token);
+    }
+
+    this.vault = new Vault(this.vaultConfig);
   }
 
-  private static String getJWT(String path) throws ConfigException {
+  private boolean isTokenValid() {
+    log.info("Checking if token is valid");
+    String token = TOKEN_METADATA.get().getToken();
+    LocalDateTime tokenExpiryTime = TOKEN_METADATA.get().getTokenExpirationTime();
+
+    log.info("DEBUGGING: isTokenValid.token: '{}'", token);
+    log.info("DEBUGGING: isTokenValid.tokenExpiryTime: '{}'", tokenExpiryTime);
+
+    if (Strings.isNullOrEmpty(token)) return false;
+    
+    if (tokenExpiryTime == null) return false;
+    
+    return LocalDateTime.now().isBefore(tokenExpiryTime);
+  }
+
+  private TokenMetadata renewKubernetesToken() throws RuntimeException {
+    log.info("Renewing Kubernetes Token");
+
     try {
-      Path file = Paths.get(path);
-      String jwt = new String(Files.readAllBytes(file));
-      if (Strings.isNullOrEmpty(jwt)) {
-        throw new Exception(String.format("JWT token from file is invalid (%s)", jwt));
-      }
-      return jwt;
+      String jwt = getJWTFromFile(this.vaultConfigProviderConfig.jwtPath);
+      AuthResponse authResponse = vault.auth().loginByKubernetes(this.vaultConfigProviderConfig.role, jwt);
+      // return vault.auth().loginByKubernetes(this.vaultConfigProviderConfig.role, jwt).getAuthClientToken();
+      String token = authResponse.getAuthClientToken();
+      LocalDateTime tokenExpirationTime = LocalDateTime.now().plusSeconds(authResponse.getAuthLeaseDuration() - this.vaultConfigProviderConfig.tokenRenewThreshold);
+      this.vaultConfig.token(token);
+      this.vault = new Vault(this.vaultConfig);
+      return new TokenMetadata(token, tokenExpirationTime);
+      // vaultConfig.token(renewedToken);
+      // this.vault = new Vault(vaultConfig);
+      // log.info("DEBUGGING: renewKubernetesToken.vaultConfig.token: '{}'", vaultConfig.getToken());
+      // LocalDateTime tokenExpiryTime = getTokenExpirationTime();
+      // TOKEN_METADATA.updateAndGet(old -> new TokenMetadata(renewedToken, tokenExpiryTime));
     } catch (Exception ex) {
-      ConfigException configException = new ConfigException(
-        String.format("Could not load JWT token from file", ex)
-      );
-      configException.initCause(ex);
-      throw configException;
+      throw new RuntimeException(ex);
     }
   }
 
-  private void configureVault() {
-    VaultConfig config = this.config.createConfig();
-    this.vault = new Vault(config);
+  private void ensureVaultIsAuthenticated() throws RuntimeException {
+    log.info("Ensuring Vault is authenticated");
+    if (this.vault == null) throw new RuntimeException("Vault is not configured");
 
+    log.info("DEBUGGING: ensureVaultIsAuthenticated.vaultConfig.token '{}'", vaultConfig.getToken());
+    if (isTokenValid()) {
+      log.info("DEBUGGING: Token is valid");
+      return;
+    }
+    
+    // String token = TOKEN_METADATA.get().getToken();
+    // LocalDateTime tokenExpiryTime = TOKEN_METADATA.get().getTokenExpirationTime();
+
+    // log.info("DEBUGGING: ensureVaultIsAuthenticated.token: '{}'", token);
+    // log.info("DEBUGGING: ensureVaultIsAuthenticated.tokenExpiryTime: '{}'", tokenExpiryTime);
+
+    // try {
+      // if (this.vaultConfigProviderConfig.loginBy == VaultLoginBy.Token) renewToken();
+    if (this.vaultConfigProviderConfig.loginBy == VaultLoginBy.Kubernetes) {
+      log.info("DEBUGGING: Fetching new k8s token");
+      // TOKEN_METADATA.updateAndGet(old -> new TokenMetadata(renewKubernetesToken(), getTokenExpirationTime()));
+      TOKEN_METADATA.updateAndGet(old -> renewKubernetesToken());
+    }
+    // } catch (VaultException ex) {
+    //   throw new RuntimeException(ex);
+    // }
+  }
+
+  private String getJWTFromFile(String path) throws Exception {
+    log.info("Reading JWT token from '{}'", path);
     try {
-      if (this.config.loginBy == VaultLoginBy.Kubernetes) {
-        String role = this.config.role;
-        String jwt = getJWT(this.config.jwtPath);
-        this.kubernetesAuth = new KubernetesAuth(this.vault, role, jwt);
-        String kubernetesAuthToken = this.kubernetesAuth.getToken();
-        config.token(kubernetesAuthToken);
-        this.tokenMetadata.set(new TokenMetadata(getTokenExpirationTime()));
-      }
-    } catch (Exception ex) {
-      ConfigException configException = new ConfigException(
-          String.format("Could not configure vault with Kubernetes Authentication", ex)
-      );
-      configException.initCause(ex);
-      throw configException;
+      Path file = Paths.get(path);
+      return new String(Files.readAllBytes(file));
+    } catch (IOException | InvalidPathException ex) {
+      throw ex;
     }
   }
 
@@ -173,15 +219,20 @@ public class VaultConfigProvider implements ConfigProvider {
   }
 
   private static class TokenMetadata {
-
+    private final String token;
     private final LocalDateTime tokenExpirationTime;
 
-    public LocalDateTime getExpirationTime() {
-        return this.tokenExpirationTime;
+    public TokenMetadata(String token, LocalDateTime tokenExpirationTime) {
+      this.token = token;
+      this.tokenExpirationTime = tokenExpirationTime;
     }
 
-      public TokenMetadata(LocalDateTime tokenExpirationTime) {
-        this.tokenExpirationTime = tokenExpirationTime;
+    public LocalDateTime getTokenExpirationTime() {
+      return this.tokenExpirationTime;
+    }
+
+    public String getToken() {
+      return this.token;
     }
   }
 }
