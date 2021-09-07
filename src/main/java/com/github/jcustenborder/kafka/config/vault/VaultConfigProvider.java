@@ -50,7 +50,7 @@ import java.util.stream.Collectors;
     "Config providers are generic and can be used in any application that utilized the Kafka AbstractConfig class. ")
 public class VaultConfigProvider implements ConfigProvider {
   private static final Logger log = LoggerFactory.getLogger(VaultConfigProvider.class);
-  private static final AtomicReference<TokenMetadata> TOKEN_METADATA = new AtomicReference<>(new TokenMetadata(null, LocalDateTime.now()));
+  private static final AtomicReference<TokenMetadata> TOKEN_METADATA = new AtomicReference<>(new TokenMetadata(null, null));
 
   VaultConfigProviderConfig vaultConfigProviderConfig;
   Vault vault;
@@ -101,10 +101,8 @@ public class VaultConfigProvider implements ConfigProvider {
     }
   }
 
-
   @Override
   public void close() throws IOException {}
-
 
   @Override
   public void configure(Map<String, ?> settings) {
@@ -132,7 +130,7 @@ public class VaultConfigProvider implements ConfigProvider {
     String token = TOKEN_METADATA.get().getToken();
     log.info("DEBUGGING: buildVault.token: '{}'", token);
     if (!Strings.isNullOrEmpty(token)) {
-      log.info("DEBUGGING: Using token saved in metadata");
+      log.info("Using token saved in metadata");
       this.vaultConfig.token(token);
     }
 
@@ -143,9 +141,6 @@ public class VaultConfigProvider implements ConfigProvider {
     log.info("Checking if token is valid");
     String token = TOKEN_METADATA.get().getToken();
     LocalDateTime tokenExpiryTime = TOKEN_METADATA.get().getTokenExpirationTime();
-
-    log.info("DEBUGGING: isTokenValid.token: '{}'", token);
-    log.info("DEBUGGING: isTokenValid.tokenExpiryTime: '{}'", tokenExpiryTime);
 
     if (Strings.isNullOrEmpty(token)) return false;
     
@@ -160,17 +155,11 @@ public class VaultConfigProvider implements ConfigProvider {
     try {
       String jwt = getJWTFromFile(this.vaultConfigProviderConfig.jwtPath);
       AuthResponse authResponse = vault.auth().loginByKubernetes(this.vaultConfigProviderConfig.role, jwt);
-      // return vault.auth().loginByKubernetes(this.vaultConfigProviderConfig.role, jwt).getAuthClientToken();
       String token = authResponse.getAuthClientToken();
       LocalDateTime tokenExpirationTime = LocalDateTime.now().plusSeconds(authResponse.getAuthLeaseDuration() - this.vaultConfigProviderConfig.tokenRenewThreshold);
       this.vaultConfig.token(token);
       this.vault = new Vault(this.vaultConfig);
       return new TokenMetadata(token, tokenExpirationTime);
-      // vaultConfig.token(renewedToken);
-      // this.vault = new Vault(vaultConfig);
-      // log.info("DEBUGGING: renewKubernetesToken.vaultConfig.token: '{}'", vaultConfig.getToken());
-      // LocalDateTime tokenExpiryTime = getTokenExpirationTime();
-      // TOKEN_METADATA.updateAndGet(old -> new TokenMetadata(renewedToken, tokenExpiryTime));
     } catch (Exception ex) {
       throw new RuntimeException(ex);
     }
@@ -180,28 +169,11 @@ public class VaultConfigProvider implements ConfigProvider {
     log.info("Ensuring Vault is authenticated");
     if (this.vault == null) throw new RuntimeException("Vault is not configured");
 
-    log.info("DEBUGGING: ensureVaultIsAuthenticated.vaultConfig.token '{}'", vaultConfig.getToken());
-    if (isTokenValid()) {
-      log.info("DEBUGGING: Token is valid");
-      return;
-    }
-    
-    // String token = TOKEN_METADATA.get().getToken();
-    // LocalDateTime tokenExpiryTime = TOKEN_METADATA.get().getTokenExpirationTime();
+    Boolean tokenIsValid = isTokenValid();
 
-    // log.info("DEBUGGING: ensureVaultIsAuthenticated.token: '{}'", token);
-    // log.info("DEBUGGING: ensureVaultIsAuthenticated.tokenExpiryTime: '{}'", tokenExpiryTime);
-
-    // try {
-      // if (this.vaultConfigProviderConfig.loginBy == VaultLoginBy.Token) renewToken();
-    if (this.vaultConfigProviderConfig.loginBy == VaultLoginBy.Kubernetes) {
-      log.info("DEBUGGING: Fetching new k8s token");
-      // TOKEN_METADATA.updateAndGet(old -> new TokenMetadata(renewKubernetesToken(), getTokenExpirationTime()));
+    if (this.vaultConfigProviderConfig.loginBy == VaultLoginBy.Kubernetes && !tokenIsValid) {
       TOKEN_METADATA.updateAndGet(old -> renewKubernetesToken());
     }
-    // } catch (VaultException ex) {
-    //   throw new RuntimeException(ex);
-    // }
   }
 
   private String getJWTFromFile(String path) throws Exception {
