@@ -52,6 +52,8 @@ public class VaultConfigProvider implements ConfigProvider {
   private static final Logger log = LoggerFactory.getLogger(VaultConfigProvider.class);
   private static final AtomicReference<TokenMetadata> TOKEN_METADATA = new AtomicReference<>(new TokenMetadata(null, null));
 
+  // could rather use a singleton
+
   VaultConfigProviderConfig vaultConfigProviderConfig;
   Vault vault;
   VaultConfig vaultConfig;
@@ -71,9 +73,15 @@ public class VaultConfigProvider implements ConfigProvider {
     }
 
     log.info("get() - path = '{}' keys = '{}'", path, keys);
+
     try {
-      LogicalResponse logicalResponse = this.vault.withRetries(this.vaultConfigProviderConfig.maxRetries, this.vaultConfigProviderConfig.retryInterval).logical().read(path);
-      if (logicalResponse.getRestResponse().getStatus() == 200) {
+      LogicalResponse logicalResponse = this.vault.withRetries(this.vaultConfigProviderConfig.maxRetries, this.vaultConfigProviderConfig.retryInterval)
+          .logical()
+          .read(path);
+      int logicalResponseStatus = logicalResponse.getRestResponse().getStatus();
+      log.info("DEBUGGING: get.logicalResponseStatus: '{}'", logicalResponseStatus);
+      log.info("DEBUGGING: get.responseData: '{}'", logicalResponse.getData());
+      if (logicalResponseStatus == 200) {
         Predicate<Map.Entry<String, String>> filter = keys == null || keys.isEmpty() ?
             entry -> true : entry -> keys.contains(entry.getKey());
         Map<String, String> result = logicalResponse.getData()
@@ -81,7 +89,6 @@ public class VaultConfigProvider implements ConfigProvider {
             .stream()
             .filter(filter)
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-
         Long ttl = logicalResponse.getLeaseDuration();
         if (ttl == null || ttl <= 0) {
           ttl = vaultConfigProviderConfig.minimumSecretTTL;
@@ -89,7 +96,7 @@ public class VaultConfigProvider implements ConfigProvider {
         return new ConfigData(result, ttl);
       } else {
         throw new ConfigException(
-            String.format("Vault path '%s' was not found", path)
+            String.format("Vault gave a '%s' response when reading '%s'", logicalResponseStatus, path)
         );
       }
     } catch (VaultException e) {
@@ -107,6 +114,7 @@ public class VaultConfigProvider implements ConfigProvider {
   @Override
   public void configure(Map<String, ?> settings) {
     this.vaultConfigProviderConfig = new VaultConfigProviderConfig(settings);
+    this.vaultConfig = vaultConfigProviderConfig.createConfig();
     buildVault();
     ensureVaultIsAuthenticated();
 
@@ -124,25 +132,47 @@ public class VaultConfigProvider implements ConfigProvider {
     log.trace("authConfig = {}", authConfig);
   }
 
-  private void buildVault() {
-    this.vaultConfig = vaultConfigProviderConfig.createConfig();
+  private ConfigData getConfigData(LogicalResponse logicalResponse, Set<String> keys) {
+    // log.info("DEBUGGING: Retrieving data from vault response");
+    Predicate<Map.Entry<String, String>> filter = keys == null || keys.isEmpty() ? entry -> true : entry -> keys.contains(entry.getKey());
+    Map<String, String> result = logicalResponse.getData()
+        .entrySet()
+        .stream()
+        .filter(filter)
+        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
-    String token = TOKEN_METADATA.get().getToken();
-    log.info("DEBUGGING: buildVault.token: '{}'", token);
-    if (!Strings.isNullOrEmpty(token)) {
-      log.info("Using token saved in metadata");
-      this.vaultConfig.token(token);
+    Long ttl = logicalResponse.getLeaseDuration();
+    if (ttl == null || ttl <= 0) {
+      ttl = vaultConfigProviderConfig.minimumSecretTTL;
+    }
+    return new ConfigData(result, ttl);
+  }
+
+  private void buildVault() {
+    // log.info("DEBUGGING: Building a vault instance");
+
+    String metadataToken = TOKEN_METADATA.get().getToken();
+    LocalDateTime tokenExpirationTime = TOKEN_METADATA.get().getTokenExpirationTime();
+
+    log.info("DEBUGGING: tokenExpirationTime '{}'", tokenExpirationTime);
+
+    if (!Strings.isNullOrEmpty(metadataToken)) {
+      log.info("DEBUGGING: Using token saved in metadata");
+      this.vaultConfig.token(metadataToken);
+    } else {
+      log.info("DEBUGGING: Metadata token is invalid '{}', using token from env variable", metadataToken);
     }
 
-    this.vault = new Vault(this.vaultConfig);
+    this.vault =  new Vault(this.vaultConfig);
+
   }
 
   private boolean isTokenValid() {
     log.info("Checking if token is valid");
-    String token = TOKEN_METADATA.get().getToken();
+    String metadataToken = TOKEN_METADATA.get().getToken();
     LocalDateTime tokenExpiryTime = TOKEN_METADATA.get().getTokenExpirationTime();
 
-    if (Strings.isNullOrEmpty(token)) return false;
+    if (Strings.isNullOrEmpty(metadataToken)) return false;
     
     if (tokenExpiryTime == null) return false;
     
@@ -157,8 +187,6 @@ public class VaultConfigProvider implements ConfigProvider {
       AuthResponse authResponse = vault.auth().loginByKubernetes(this.vaultConfigProviderConfig.role, jwt);
       String token = authResponse.getAuthClientToken();
       LocalDateTime tokenExpirationTime = LocalDateTime.now().plusSeconds(authResponse.getAuthLeaseDuration() - this.vaultConfigProviderConfig.tokenRenewThreshold);
-      this.vaultConfig.token(token);
-      this.vault = new Vault(this.vaultConfig);
       return new TokenMetadata(token, tokenExpirationTime);
     } catch (Exception ex) {
       throw new RuntimeException(ex);
@@ -169,10 +197,22 @@ public class VaultConfigProvider implements ConfigProvider {
     log.info("Ensuring Vault is authenticated");
     if (this.vault == null) throw new RuntimeException("Vault is not configured");
 
+    String metadataToken = TOKEN_METADATA.get().getToken();
+    String vaultConfigToken = this.vaultConfig.getToken();
+
+    log.info(String.format("DEBUGGING: isTokenValid.metadataToken (%s) != isTokenValid.vaultConfigToken (%s): '%s'", metadataToken, vaultConfigToken, metadataToken != vaultConfigToken));
+
+    if (metadataToken != vaultConfigToken) {
+      buildVault();
+      return;
+    }
+
     Boolean tokenIsValid = isTokenValid();
 
     if (this.vaultConfigProviderConfig.loginBy == VaultLoginBy.Kubernetes && !tokenIsValid) {
       TOKEN_METADATA.updateAndGet(old -> renewKubernetesToken());
+      buildVault();
+      return;
     }
   }
 
