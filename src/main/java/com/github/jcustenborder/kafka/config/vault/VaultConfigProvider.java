@@ -148,6 +148,7 @@ public class VaultConfigProvider implements ConfigProvider {
     if (Strings.isNullOrEmpty(TOKEN_METADATA.get().getToken())) return false;
     
     LocalDateTime tokenExpiryTime = TOKEN_METADATA.get().getTokenExpirationTime();
+    log.info("Token expiry time: '{}'", tokenExpiryTime);
     
     if (tokenExpiryTime == null) return false;
     
