@@ -66,8 +66,10 @@ class VaultConfigProviderConfig extends AbstractConfig {
   static final String ROLE_DOC = "Sets the role used to use with kubernetes authentication.";
 
   public static final String JWT_PATH_CONFIG = "vault.jwt.path";
-  static final String JWT_PATH_DOC = "Sets the path for the JWT token used with kubernetes authentication. "
-      + "If no path is explicitly set then /var/run/secrets/kubernetes.io/serviceaccount/token is used ";
+  static final String JWT_PATH_DOC = "Sets the path for the JWT token used with kubernetes authentication.";
+
+  public static final String TOKEN_RENEW_THRESHOLD_SECONDS_CONFIG = "vault.token.renew.threshold.seconds";
+  static final String TOKEN_RENEW_THRESHOLD_SECONDS_DOC = "Sets the renew threshold used to determine if the token needs to be renewed from vault.";
 
   public final int maxRetries;
   public final int retryInterval;
@@ -76,6 +78,7 @@ class VaultConfigProviderConfig extends AbstractConfig {
   public final long minimumSecretTTL;
   public final String role;
   public final String jwtPath;
+  public final Long tokenRenewThreshold;
 
   public VaultConfigProviderConfig(Map<String, ?> settings) {
     super(config(), settings);
@@ -86,6 +89,7 @@ class VaultConfigProviderConfig extends AbstractConfig {
     this.minimumSecretTTL = getLong(MIN_TTL_MS_CONFIG);
     this.role = getString(ROLE_CONFIG);
     this.jwtPath = getString(JWT_PATH_CONFIG);
+    this.tokenRenewThreshold = getLong(TOKEN_RENEW_THRESHOLD_SECONDS_CONFIG);
   }
 
   public static ConfigDef config() {
@@ -104,7 +108,6 @@ class VaultConfigProviderConfig extends AbstractConfig {
                 .defaultValue(VaultLoginBy.Token.name())
                 .build()
         )
-
         .define(
             ConfigKeyBuilder.of(TOKEN_CONFIG, ConfigDef.Type.PASSWORD)
                 .documentation(TOKEN_DOC)
@@ -162,6 +165,12 @@ class VaultConfigProviderConfig extends AbstractConfig {
               .documentation(JWT_PATH_DOC)
               .importance(ConfigDef.Importance.LOW)
               .defaultValue("")
+              .build()
+        ).define(
+          ConfigKeyBuilder.of(TOKEN_RENEW_THRESHOLD_SECONDS_CONFIG, ConfigDef.Type.LONG)
+              .documentation(TOKEN_RENEW_THRESHOLD_SECONDS_DOC)
+              .importance(ConfigDef.Importance.LOW)
+              .defaultValue(60L)
               .build()
         );
   }
